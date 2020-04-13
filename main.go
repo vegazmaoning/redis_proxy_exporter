@@ -1,34 +1,46 @@
 package main
 
 import (
-	"os"
+	"flag"
 	"net/http"
+	"os"
 	"time"
-	"log"
-	"fmt"
 
-	"github.com/jessevdk/go-flags"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	log "github.com/sirupsen/logrus"
 )
 
-type Options struct {
-	ProxyAddr string `short:"h" long:"proxy.addr" value-name:"proxy_address" default:"localhost:7617" description:"Redis proxy address(ip:port)"`
-	Password string `short:"p" long:"proxy.password" value-name:"proxy_password" default:"" description:"Redis proxy password"`
-	Namespace string `short:"n" long:"namespace" value-name:"namespace" default:"redis_proxy" description:"Namespace for the metric"`
-	Timeout  time.Duration `short:"t" long:"timeout" value-name:"timeout" default:"15s" description:"Timeout for connect to redis proxy"`
-//	ProxyMetricOnly bool `long:"proxy_metric_only" value-name:"proxy_metric_only" default:"false" description:"Whether to also export go runtime metrics"`
-	ListenAddr string `long:"web.listen" value-name:"web listen" default:":9122" description:"Listen address"`
+func getEnv(key string, defaultValue string) string {
+	if val, ok := os.LookupEnv(key); ok {
+		return val
+	}
+	return defaultValue
 }
 
-var opt Options
 func main() {
-	_, err := flags.ParseArgs(&opt, os.Args[1:])
+	var (
+		proxyAddr     = flag.String("proxy.addr", getEnv("PROXY_ADDR", ":7617"), "Redis proxy address(ip:port)")
+		proxyPassword = flag.String("proxy.password", getEnv("PROXY_PASSWORD", ""), "Proxy password")
+		namespace     = flag.String("namespace", "redis_proxy", "Namespace for the metric")
+		timeout       = flag.String("timeout", "15s", "Timeout for connect to redis proxy")
+		listenAddr    = flag.String("web.listen", ":9122", "Listen address")
+		logLevel      = flag.String("loglevel", "INFO", "loglevel(DEBUG or INFO)")
+	)
+	flag.Parse()
+	connectTimeout, err := time.ParseDuration(*timeout)
 	if err != nil {
-		fmt.Println("parse args error %v", err)
+
 	}
-	exporter := NewExporter(opt.ProxyAddr, opt.Password, opt.Namespace)
+	switch *logLevel {
+	case "DEBUG":
+		log.SetLevel(log.DebugLevel)
+	default:
+		log.SetLevel(log.InfoLevel)
+	}
+	exporter := NewExporter(*proxyAddr, *proxyPassword, *namespace, connectTimeout)
 	prometheus.MustRegister(exporter)
 	http.Handle("/metrics", promhttp.Handler())
-	log.Fatal(http.ListenAndServe(opt.ListenAddr, nil))
+	log.Infof("Providing metrics at %s/metrics", *listenAddr)
+	log.Fatal(http.ListenAndServe(*listenAddr, nil))
 }
