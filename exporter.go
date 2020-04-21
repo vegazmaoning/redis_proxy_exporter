@@ -74,6 +74,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	for _, m := range e.latencyMetrics {
 		ch <- m
 	}
+	e.latencyMetrics = e.latencyMetrics[:0]
 	log.Debugf("scrape complete.")
 }
 
@@ -118,11 +119,11 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 	e.parseInfo(ch, client)
 }
 
-func (e *Exporter) parseInfo(ch chan<- prometheus.Metric, client redis.Conn) error {
+func (e *Exporter) parseInfo(ch chan<- prometheus.Metric, client redis.Conn)  {
 	info, err := redis.String(client.Do("INFO"))
 	if err != nil {
 		log.Errorf("execute info error err:%s", err)
-		return err
+		return
 	}
 	lines := strings.Split(info, "\n")
 	var infoType = 0
@@ -176,7 +177,27 @@ func (e *Exporter) parseInfo(ch chan<- prometheus.Metric, client redis.Conn) err
 			}
 		}
 	}
-	return nil
+	for _, server := range servers {
+		r, err := redis.String(client.Do("INFO", "ServerLatency", server))
+		if err != nil {
+			log.Errorf("redis %s INFO ServerLatency %s error:%q", e.proxyAddr, server, err)
+			continue
+		}
+		latency = ""
+		lines = strings.Split(r, "\n")
+		for len(lines) > 0 {
+			line := lines[0]
+			lines = lines[1:]
+			if strings.HasPrefix(line, "ServerLatencyMonitorName") {
+				latency = strings.Split(line, " ")[1]
+				buckets, last, lineNum, ok := e.parseBuckets(lines)
+				if ok {
+					e.addLatencyMetrics(buckets, last, true, server, latency)
+				}
+				lines = lines[lineNum:]
+			}
+		}
+	}
 }
 
 func (e *Exporter) registerConstMetric(ch chan<- prometheus.Metric, metric string, val float64, docString string, valType prometheus.ValueType, labelValues ...string) {
@@ -244,6 +265,7 @@ func (e *Exporter) addLatencyMetrics(buckets []Bucket, last Bucket, server bool,
 		}
 		vc[latencyBuckets[i]] = count
 	}
+	log.Infof("bucket %v", buckets)
 	for ; j < len(buckets); j++ {
 		value += float64(buckets[j].value)
 		count += buckets[j].count
@@ -304,3 +326,4 @@ func NewExporter(proxyAddr, password, namespace string, timeout time.Duration) *
 	}
 	return e
 }
+
